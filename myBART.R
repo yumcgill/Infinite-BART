@@ -13,7 +13,7 @@ source("parameters_quantities_tree.R")
 
 
 bart = function(x,y,x.pred = NULL,sparse = TRUE,ntrees = 200,node_min_size = 5,alpha = 0.95,beta = 2,
-              nu = 3,lambda = NULL,mu_mu = 0,sigma2 = 1,sigma2_mu = 1,nburn = 20000,npost = 1000,nthin = 10,
+              nu = 3,lambda = NULL,mu_mu = 0,sigma2 = 1,sigma2_mu = NULL,nburn = 20000,npost = 1000,nthin = 10,
               penalise_num_cov = TRUE,lambda_cov = 0.4,nu_cov = 2) {
   
   # Extract control parameters
@@ -48,6 +48,10 @@ bart = function(x,y,x.pred = NULL,sparse = TRUE,ntrees = 200,node_min_size = 5,a
     q = 0.9
     lambda = qgamma(1-q,nu, rate =1/2)*(y_sd^2)/nu
   }
+  if (is.null(sigma2_mu)){
+    sigma2_mu =(0.5/(sqrt(ntrees)*2))^2
+  }
+  
   
   # Create a list of trees for the initial stump
   curr_trees = create_stump(num_trees = ntrees,

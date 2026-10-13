@@ -15,157 +15,93 @@
 
 
 # Fill_tree_details -------------------------------------------------------
+# OPTIMISED: instead of scanning all n observations once per node
+# (O(n * #nodes), with repeated `node_indices == parent` comparisons), the
+# observations are pushed down the tree once: each internal node splits the
+# index set of its parent. Cost is O(n * depth). Output is identical.
+# (Same assumption as the original code: a parent row precedes its children.)
 
 fill_tree_details = function(curr_tree, X) {
-  
-  # Collect right bits of tree
+
   tree_matrix = curr_tree$tree_matrix
-  
-  # Create a new tree matrix to overwrite
-  new_tree_matrix = tree_matrix
-  
-  # Start with dummy node indices
-  node_indices = rep(1, nrow(X))
-  
-  new_tree_matrix[1,'node_size'] = nrow(X)
-    
-  # For all but the top row, find the number of observations falling into each one
-  for(i in 2:nrow(tree_matrix)) {
-    
-    # Get the parent
-    curr_parent = as.numeric(tree_matrix[i,'parent'])
-    
-    # Find the split variable and value of the parent
-    split_var = as.numeric(tree_matrix[curr_parent,'split_variable'])
-    split_val = as.numeric(tree_matrix[curr_parent, 'split_value'])
-    
-    # Find whether it's a left or right terminal node
-    left_or_right = ifelse(tree_matrix[curr_parent,'child_left'] == i,
-                           'left', 'right')
-    if(left_or_right == 'left') {
-      # If left use less than condition
-      new_tree_matrix[i,'node_size'] = sum(X[node_indices == curr_parent,split_var] < split_val)
-      node_indices[node_indices == curr_parent][X[node_indices == curr_parent,split_var] < split_val] = i
-    } else {
-      # If right use greater than condition
-      new_tree_matrix[i,'node_size'] = sum(X[node_indices == curr_parent,split_var] >= split_val)
-      node_indices[node_indices == curr_parent][X[node_indices == curr_parent,split_var] >= split_val] = i
+  n  = nrow(X)
+  nr = nrow(tree_matrix)
+
+  node_indices = rep.int(1L, n)
+  node_size    = numeric(nr)
+  node_size[1] = n
+
+  if (nr > 1) {
+    terminal = tree_matrix[, 'terminal']
+    cl  = tree_matrix[, 'child_left']
+    cr  = tree_matrix[, 'child_right']
+    sv  = tree_matrix[, 'split_variable']
+    sval = tree_matrix[, 'split_value']
+
+    members = vector('list', nr)
+    members[[1]] = seq_len(n)
+    for (i in which(terminal == 0)) {          # internal nodes, in row order
+      idx = members[[i]]
+      go_left = X[idx, sv[i]] < sval[i]
+      members[[cl[i]]] = idx[go_left]
+      members[[cr[i]]] = idx[!go_left]
     }
-  } # End of loop through table
-  
-  return(list(tree_matrix = new_tree_matrix,
+    node_size = as.numeric(lengths(members))
+    for (i in which(terminal == 1)) {
+      if (length(members[[i]])) node_indices[members[[i]]] = i
+    }
+  }
+
+  tree_matrix[, 'node_size'] = node_size
+  return(list(tree_matrix = tree_matrix,
               node_indices = node_indices))
-  
+
 } # End of function
 
 
-
-
-
+# NEW: prediction of ONE tree at every row of X (no masking by W) ----------
+# This is the basic building block used everywhere below: it routes every
+# row of X to a leaf and returns the leaf value.
+predict_tree_full = function(tree, X) {
+  tm = tree$tree_matrix
+  if (nrow(tm) == 1) return(rep.int(tm[1, 'mu'], nrow(X)))
+  as.numeric(tm[fill_tree_details(tree, X)$node_indices, 'mu'])
+}
 
 
 # Get predictions ---------------------------------------------------------
+# OPTIMISED: loop instead of recursion (the recursion copied the list of
+# trees at every level: O(K^2) copies).
 
 get_predictions = function(trees, X, single_tree = FALSE) {
-  
+
   # Stop nesting problems in case of multiple trees
   if(is.null(names(trees)) & (length(trees) == 1)) trees = trees[[1]]
-  
-  # Normally trees will be a list of lists but just in case
-  if(single_tree) {
-    # Deal with just a single tree
-    if(nrow(trees$tree_matrix) == 1) {
-      predictions = rep(trees$tree_matrix[1, 'mu'], nrow(X))
-    } else {
-      # Loop through the node indices to get predictions
-      predictions = rep(NA, nrow(X))
-      unique_node_indices = unique(trees$node_indices)
-      # Get the node indices for the current X matrix
-      curr_X_node_indices = fill_tree_details(trees, X)$node_indices
-      # Now loop through all node indices to fill in details
-      for(i in 1:length(unique_node_indices)) {
-        predictions[curr_X_node_indices == unique_node_indices[i]] =
-          trees$tree_matrix[unique_node_indices[i], 'mu']
-      }
-    }
-    # More here to deal with more complicated trees - i.e. multiple trees
-  } else {
-    # Do a recursive call to the function
-    partial_trees = trees
-    partial_trees[[1]] = NULL # Blank out that element of the list
-    predictions = get_predictions(trees[[1]], X, single_tree = TRUE)  +
-      get_predictions(partial_trees, X,
-                      single_tree = length(partial_trees) == 1)
-    #single_tree = !is.null(names(partial_trees)))
-    # The above only sets single_tree to if the names of the object is not null (i.e. is a list of lists)
-  }
-  
+  if (!is.null(names(trees))) return(predict_tree_full(trees, X))
+
+  predictions = numeric(nrow(X))
+  for (k in seq_along(trees)) predictions = predictions + predict_tree_full(trees[[k]], X)
   return(predictions)
 }
 
 #### for BART-IBP
-
+# W: vector (single tree) or n x K matrix (one column per tree)
 get_predictions_ibp = function(trees, X, W, single_tree = FALSE) {
-  
-  # Stop nesting problems in case of multiple trees
+
   if(is.null(names(trees)) & (length(trees) == 1)) trees = trees[[1]]
-  
-  # Normally trees will be a list of lists but just in case
-  if(single_tree) {
-    # Deal with just a single tree
-    if(nrow(trees$tree_matrix) == 1) {
-      predictions = rep(trees$tree_matrix[1, 'mu'], nrow(X))
-      
-      #!! if we have only one tree W is a vector
-      if ( is.null(dim(W)) ){
-        predictions = predictions * W
-      } else{
-        predictions = predictions * W[,1]
-      }
-      
-    
-    } else {
-      # Loop through the node indices to get predictions
-      
-      predictions = rep(NA, nrow(X))
-      
-      unique_node_indices = unique(trees$node_indices)
-      
-      # Get the node indices for the current X matrix
-      curr_X_node_indices = fill_tree_details(trees, X )$node_indices
-      
-      # Now loop through all node indices to fill in details
-      for(i in 1:length(unique_node_indices)) {
-        predictions[curr_X_node_indices == unique_node_indices[i]] =
-          trees$tree_matrix[unique_node_indices[i], 'mu']
-      }
-      
-      #!! if we have only one tree W is a vector
-      if ( is.null(dim(W)) ){
-        predictions = predictions * W
-      } else{
-        predictions = predictions * W[,1]
-      }
-      
-    }
-    
-    # More here to deal with more complicated trees - i.e. multiple trees
-  } else {
-    # Do a recursive call to the function
-    partial_trees = trees
-    partial_trees[[1]] = NULL # Blank out that element of the list
-    W1=W[,1]
-    W= W[,-1]
-    predictions = get_predictions_ibp(trees[[1]], X, W1,  single_tree = TRUE)  +
-      get_predictions_ibp(partial_trees, X, W,
-                      single_tree = length(partial_trees) == 1)
-    #single_tree = !is.null(names(partial_trees)))
-    # The above only sets single_tree to if the names of the object is not null (i.e. is a list of lists)
+
+  if (!is.null(names(trees))) {           # a single tree
+    w = if (is.null(dim(W))) W else W[, 1]
+    return(predict_tree_full(trees, X) * w)
   }
-  
+
+  W = as.matrix(W)
+  predictions = numeric(nrow(X))
+  for (k in seq_along(trees)) {
+    predictions = predictions + predict_tree_full(trees[[k]], X) * W[, k]
+  }
   return(predictions)
 }
-
 
 
 

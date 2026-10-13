@@ -360,6 +360,14 @@ clean_prune_tree = function(X,y, curr_tree) {
    
    # the granparent becomes the parent of the remained sibling, after the chosen node and its parent will be eliminated
    new_tree$tree_matrix[sibling_node,'parent'] = as.numeric(curr_grandparent)
+
+   # BUG FIX: remember WHICH child slot of the grandparent pointed to the removed parent,
+   # so the sibling can be put in that same slot (left stays left, right stays right).
+   if (!is.na(curr_grandparent)) {
+     gp_slot = if (isTRUE(new_tree$tree_matrix[curr_grandparent,'child_left'] == parent_node)) 'child_left' else 'child_right'
+     # row index of the sibling after the two rows are deleted
+     sibling_new = sibling_node - (sibling_node > node_to_remove) - 1
+   }
    
     bad_parents = which(as.numeric(new_tree$tree_matrix[,'parent'])>node_to_remove)
     bad_child_right = which(as.numeric(new_tree$tree_matrix[,'child_right'])>node_to_remove)
@@ -393,10 +401,11 @@ clean_prune_tree = function(X,y, curr_tree) {
       if (parent_node ==1 ){ 
       new_tree$tree_matrix[1,'parent']=NA } 
       else{
-      # Find both the new children of the granparent
-      curr_children = which(as.numeric(new_tree$tree_matrix[,'parent']) == curr_grandparent)
-      # Input these children back into the parent
-      new_tree$tree_matrix[curr_grandparent,c('child_left','child_right')] = sort(curr_children)
+      # BUG FIX: the original re-assigned the grandparent's children with sort(),
+      # which swaps left/right (and hence flips the split) whenever the sibling ends up
+      # with a larger row index than its new brother. Put the sibling in the slot of
+      # the removed parent instead; the other slot was already renumbered above.
+      new_tree$tree_matrix[curr_grandparent, gp_slot] = sibling_new
       }
       # Call the fill function on this tree
       new_tree = fill_tree_details(new_tree, X)

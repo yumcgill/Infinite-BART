@@ -11,24 +11,25 @@
 # 5. get_number_distinct_cov: counts the number of distinct covariates that are used in a tree to create the splitting rules
 # Compute the full conditionals -------------------------------------------------
 
+# Helper: sum of R within each terminal node, in the order of `leaves`.
+# rowsum() is compiled code; the original aggregate() goes through
+# data.frames and was ~50x slower. Also robust to empty leaves (the
+# original silently mis-aligned nj and S_j if a leaf was empty).
+sum_by_leaf = function(R, node_indices, leaves) {
+  s = rowsum(R, node_indices, reorder = FALSE)
+  out = numeric(length(leaves))
+  out[match(as.integer(rownames(s)), leaves)] = s[, 1]
+  out
+}
+
 tree_full_conditional = function(tree, R, sigma2, sigma2_mu) {
-  
-  # Function to compute log full conditional distirbution for an individual tree
-  # R is a vector of partial residuals
-  
-  # Need to calculate log complete conditional, involves a sum over terminal nodes
-  
-  # First find which rows are terminal nodes
+
+  # log marginal likelihood of the partial residuals R for an individual tree
   which_terminal = which(tree$tree_matrix[,'terminal'] == 1)
-  
-  # Get node sizes for each terminal node
   nj = tree$tree_matrix[which_terminal,'node_size']
-  
-  # Get sum of residuals and sum of residuals squared within each terminal node
-  sumRsq_j = aggregate(R, by = list(tree$node_indices), function(x) sum(x^2))[,2]
-  S_j = aggregate(R, by = list(tree$node_indices), sum)[,2]
-  
-  # Now calculate the log posterior
+  S_j = sum_by_leaf(R, tree$node_indices, which_terminal)
+  # (the original also computed sum(R^2) per leaf, but it cancels in the MH ratio and was never used)
+
   log_post = 0.5 * ( sum(log( sigma2 / (nj*sigma2_mu + sigma2))) +
                        sum( (sigma2_mu* S_j^2) / (sigma2 * (nj*sigma2_mu + sigma2))))
   return(log_post)
@@ -38,29 +39,17 @@ tree_full_conditional = function(tree, R, sigma2, sigma2_mu) {
 # Simulate_par -------------------------------------------------------------
 
 simulate_mu = function(tree, R, sigma2, sigma2_mu) {
-  
-  # Simulate mu values for a given tree
-  
-  # First find which rows are terminal nodes
+
   which_terminal = which(tree$tree_matrix[,'terminal'] == 1)
-  
-  # Get node sizes for each terminal node
   nj = tree$tree_matrix[which_terminal,'node_size']
-  
-  # Get sum of residuals in each terminal node
-  sumR = aggregate(R, by = list(tree$node_indices), sum)[,2]
-  
-  # Now calculate mu values
+  sumR = sum_by_leaf(R, tree$node_indices, which_terminal)
+
   mu = rnorm(length(nj) ,
              mean = (sumR / sigma2) / (nj/sigma2 + 1/sigma2_mu),
              sd = sqrt(1/(nj/sigma2 + 1/sigma2_mu)))
-  
-  # Wipe all the old mus out for other nodes
+
   tree$tree_matrix[,'mu'] = NA
-  
-  # Put in just the ones that are useful
   tree$tree_matrix[which_terminal,'mu'] = mu
-  
   return(tree)
 }
 
@@ -89,38 +78,19 @@ update_z = function(y, prediction){
 # Get tree priors ---------------------------------------------------------
 
 get_tree_prior = function(tree, alpha, beta) {
-  
-  # Need to work out the depth of the tree
-  # First find the level of each node, then the depth is the maximum of the level
-  level = rep(NA, nrow(tree$tree_matrix))
-  level[1] = 0 # First row always level 0
-  
-  # Escpae quickly if tree is just a stump
-  if(nrow(tree$tree_matrix) == 1) {
-    return(log(1 - alpha)) # Tree depth is 0
-  }
-  
-  for(i in 2:nrow(tree$tree_matrix)) {
-    # Find the current parent
-    curr_parent = as.numeric(tree$tree_matrix[i,'parent'])
-    # This child must have a level one greater than it's current parent
-    level[i] = level[curr_parent] + 1
-  }
-  
-  # Only compute for the internal nodes
-  internal_nodes = which(as.numeric(tree$tree_matrix[,'terminal']) == 0)
-  log_prior = 0
-  for(i in 1:length(internal_nodes)) {
-    log_prior = log_prior + log(alpha) - beta * log(1 + level[internal_nodes[i]])
-  }
-  # Now add on terminal nodes
-  terminal_nodes = which(as.numeric(tree$tree_matrix[,'terminal']) == 1)
-  for(i in 1:length(terminal_nodes)) {
-    log_prior = log_prior + log(1 - alpha * ((1 + level[terminal_nodes[i]])^(-beta)))
-  }
-  
-  return(log_prior)
-  
+
+  tm = tree$tree_matrix
+  nr = nrow(tm)
+  if (nr == 1) return(log(1 - alpha))   # stump
+
+  # depth of each node (parents precede children in the matrix)
+  parent = tm[, 'parent']
+  level = numeric(nr)
+  for (i in 2:nr) level[i] = level[parent[i]] + 1
+
+  term = tm[, 'terminal'] == 1
+  sum(log(alpha) - beta * log(1 + level[!term])) +
+    sum(log(1 - alpha * (1 + level[term])^(-beta)))
 }
 
 # get_num_cov_prior <- function(tree, lambda_cov, nu_cov, penalise_num_cov){

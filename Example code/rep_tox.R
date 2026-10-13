@@ -3,8 +3,8 @@ options(mc.cores = 10)
 source("simulate_data.R")
 source("myBART.R")
 source("myBART-IBP.R")
-aquatic_toxicity <- read.csv("datasets/toxicity/qsar_aquatic_toxicity.csv", header=FALSE, sep=";")
-
+aquatic_toxicity <- read.csv("toxicity/qsar_aquatic_toxicity.csv", header=FALSE, sep=";")
+# View(qsar_aquatic_toxicity)
 
 # Set design matrix and response vector (full: both train and test)
 x.full = model.matrix( ~ V1 + V2 + V3 + V4 + V5 + V6 + as.factor(V7) + V8, data=aquatic_toxicity )

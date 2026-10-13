@@ -3,7 +3,7 @@ options(mc.cores = 23)
 source("simulate_data.R")
 source("myBART.R")
 source("myBART-IBP.R")
-motor_data <- read.csv("datasets/bike/bike.csv")
+motor_data <- read.csv("bike/bike.csv")
 
 # remove missing values
 motor_data = motor_data[complete.cases(motor_data), ]
